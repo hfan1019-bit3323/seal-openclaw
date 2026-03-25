@@ -104,16 +104,17 @@ fi
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "No existing config found, running openclaw onboard..."
 
+    # Determine auth choice — openclaw onboard reads the actual key values
+    # from environment variables (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.)
+    # so we only pass --auth-choice, never the key itself, to avoid
+    # exposing secrets in process arguments visible via ps/proc.
     AUTH_ARGS=""
     if [ -n "$CLOUDFLARE_AI_GATEWAY_API_KEY" ] && [ -n "$CF_AI_GATEWAY_ACCOUNT_ID" ] && [ -n "$CF_AI_GATEWAY_GATEWAY_ID" ]; then
-        AUTH_ARGS="--auth-choice cloudflare-ai-gateway-api-key \
-            --cloudflare-ai-gateway-account-id $CF_AI_GATEWAY_ACCOUNT_ID \
-            --cloudflare-ai-gateway-gateway-id $CF_AI_GATEWAY_GATEWAY_ID \
-            --cloudflare-ai-gateway-api-key $CLOUDFLARE_AI_GATEWAY_API_KEY"
+        AUTH_ARGS="--auth-choice cloudflare-ai-gateway-api-key"
     elif [ -n "$ANTHROPIC_API_KEY" ]; then
-        AUTH_ARGS="--auth-choice apiKey --anthropic-api-key $ANTHROPIC_API_KEY"
+        AUTH_ARGS="--auth-choice apiKey"
     elif [ -n "$OPENAI_API_KEY" ]; then
-        AUTH_ARGS="--auth-choice openai-api-key --openai-api-key $OPENAI_API_KEY"
+        AUTH_ARGS="--auth-choice openai-api-key"
     fi
 
     openclaw onboard --non-interactive --accept-risk \
@@ -320,10 +321,13 @@ rm -f "$CONFIG_DIR/gateway.lock" 2>/dev/null || true
 
 echo "Dev mode: ${OPENCLAW_DEV_MODE:-false}"
 
+# Gateway token (if set) is already written to openclaw.json by the config
+# patch above (gateway.auth.token). We deliberately avoid passing --token on
+# the command line because CLI arguments are visible to all processes in the
+# container via ps/proc.
 if [ -n "$OPENCLAW_GATEWAY_TOKEN" ]; then
     echo "Starting gateway with token auth..."
-    exec openclaw gateway --port 18789 --verbose --allow-unconfigured --bind lan --token "$OPENCLAW_GATEWAY_TOKEN"
 else
     echo "Starting gateway with device pairing (no token)..."
-    exec openclaw gateway --port 18789 --verbose --allow-unconfigured --bind lan
 fi
+exec openclaw gateway --port 18789 --verbose --allow-unconfigured --bind lan
