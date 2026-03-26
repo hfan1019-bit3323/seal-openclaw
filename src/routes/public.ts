@@ -37,16 +37,24 @@ publicRoutes.get('/api/status', async (c) => {
   try {
     let process = await findExistingGatewayProcess(sandbox);
     if (!process) {
-      // No gateway process found — kick off a start attempt in the background.
+      // No gateway process found — start it synchronously.
       // The loading page polls /api/status, so this ensures the gateway
       // eventually starts even if the initial waitUntil from the catch-all
       // route didn't fire (e.g., due to DO execution context limitations).
-      c.executionCtx.waitUntil(
-        ensureGateway(sandbox, c.env).catch((err: Error) => {
-          console.error('[api/status] Background gateway start failed:', err);
-        }),
-      );
-      return c.json({ ok: false, status: 'not_running' });
+      try {
+        await ensureGateway(sandbox, c.env);
+        process = await findExistingGatewayProcess(sandbox);
+      } catch (err: unknown) {
+        console.error('[api/status] Gateway start failed:', err);
+        return c.json({
+          ok: false,
+          status: 'start_failed',
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      if (!process) {
+        return c.json({ ok: false, status: 'not_running' });
+      }
     }
 
     // Process exists, check if it's actually responding
