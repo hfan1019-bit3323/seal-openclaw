@@ -546,7 +546,7 @@ app.all('*', async (c) => {
  * Configure the check interval in wrangler.jsonc triggers.crons (default: every 1 minute).
  */
 async function handleScheduled(env: MoltbotEnv): Promise<void> {
-  const cronStoreObject = await env.MOLTBOT_BUCKET.get(CRON_STORE_R2_KEY);
+  const cronStoreObject = await env.BACKUP_BUCKET.get(CRON_STORE_R2_KEY);
   if (!cronStoreObject) {
     console.log('[CRON] No cron store found in R2, skipping');
     return;
