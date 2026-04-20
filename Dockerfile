@@ -22,7 +22,7 @@ RUN ARCH="$(dpkg --print-architecture)" \
 
 # Install OpenClaw
 # Pin to specific version for reproducible builds
-RUN npm install -g openclaw@2026.3.23-2 \
+RUN npm install -g openclaw@2026.4.15 \
     && openclaw --version
 
 # Use /home/openclaw as the home directory instead of /root.
@@ -42,6 +42,12 @@ RUN chmod +x /usr/local/bin/start-openclaw.sh
 
 # Copy custom skills
 COPY skills/ /home/openclaw/clawd/skills/
+
+# Bake seal ai workspace skeleton (R2 sync overlays on top at runtime)
+COPY workspace/SOUL.md   /home/openclaw/clawd/SOUL.md
+COPY workspace/AGENTS.md /home/openclaw/clawd/AGENTS.md
+COPY workspace/USER.md   /home/openclaw/clawd/USER.md
+COPY workspace/skills/   /home/openclaw/clawd/skills/
 
 # Ensure all files are readable for mksquashfs (Sandbox SDK backup).
 # OpenClaw and other tools may create restrictive config files at runtime,
