@@ -59,6 +59,17 @@ export function createAccessMiddleware(options: AccessMiddlewareOptions) {
     const teamDomain = c.env.CF_ACCESS_TEAM_DOMAIN;
     const expectedAud = c.env.CF_ACCESS_AUD;
 
+    // Allow gateway-token-authenticated requests (service bindings, programmatic access).
+    // These callers don't have a CF Access JWT but present the shared gateway token,
+    // which OpenClaw itself will re-validate inside the container.
+    const queryToken = new URL(c.req.url).searchParams.get('token');
+    const bearerToken = c.req.header('Authorization')?.replace(/^Bearer\s+/i, '');
+    const incomingToken = queryToken || bearerToken;
+    if (incomingToken && c.env.MOLTBOT_GATEWAY_TOKEN && incomingToken === c.env.MOLTBOT_GATEWAY_TOKEN) {
+      c.set('accessUser', { email: 'service@internal', name: 'Service Client' });
+      return next();
+    }
+
     // Check if CF Access is configured
     if (!teamDomain || !expectedAud) {
       if (type === 'json') {
