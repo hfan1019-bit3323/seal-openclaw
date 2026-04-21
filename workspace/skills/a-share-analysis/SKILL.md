@@ -17,8 +17,21 @@ description: Analyze A-share market structure, sector rotation, capital flows, l
 
 ### 当前环境下的数据策略
 
-优先使用 `web_search` + `agent-browser` + `opencli-fetch` + `web_fetch` 获取公开网页信息。
-按这个顺序找数据：
+**首选：Market Data Plane（缓存 ~6ms，结构化数据）**
+
+板块资金流、龙虎榜、指数行情、涨停池、北向资金这 5 类数据，**优先走 `market-fetcher` skill**，不要第一步就上 agent-browser：
+
+1. 先调 `market.read_latest(task_id)` 读缓存
+2. 未命中则调 `market.fetch_now(task_id, akshare_fn, args)` 同步抓取
+3. 用户反复问同一类数据且清单里没有 → 调 `market.schedule()` 后告知用户
+
+已支持的 task_id：`sector-flows` / `dragon-tiger` / `index-daily` / `limit-up` / `north-flow`
+
+Market Data Plane 不可用（连续 5xx 或 fetch 超时）时，降级到下方的 agent-browser 路径。
+
+**降级/补充：web_search + agent-browser + opencli-fetch + web_fetch**
+
+Market Data Plane 不覆盖的数据（个股资金、新闻、公告、同花顺等），按以下顺序：
 1. 东方财富
 2. 新浪财经
 3. 同花顺
