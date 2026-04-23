@@ -40,6 +40,50 @@ export function extractJWT(c: Context<AppEnv>): string | null {
   return jwtHeader || jwtCookie || null;
 }
 
+const readCookie = (cookieHeader: string | null | undefined, name: string): string | null => {
+  if (!cookieHeader) return null;
+  const match = cookieHeader
+    .split(';')
+    .map((entry) => entry.trim())
+    .find((entry) => entry.startsWith(`${name}=`));
+  if (!match) return null;
+  return decodeURIComponent(match.slice(name.length + 1));
+};
+
+export function extractGatewayToken(c: Context<AppEnv>): string | null {
+  let queryToken: string | null = null;
+  try {
+    queryToken = new URL((c.req.raw as Request).url).searchParams.get('token');
+  } catch {
+    queryToken = null;
+  }
+  const bearerToken = c.req.header('Authorization')?.replace(/^Bearer\s+/i, '') || null;
+  const cookieToken = readCookie(c.req.header('Cookie'), 'openclaw_gateway_token');
+  return queryToken || bearerToken || cookieToken;
+}
+
+const readGatewayTokenSources = (c: Context<AppEnv>) => {
+  let queryToken: string | null = null;
+  try {
+    queryToken = new URL((c.req.raw as Request).url).searchParams.get('token');
+  } catch {
+    queryToken = null;
+  }
+  const bearerToken = c.req.header('Authorization')?.replace(/^Bearer\s+/i, '') || null;
+  const cookieToken = readCookie(c.req.header('Cookie'), 'openclaw_gateway_token');
+  return { queryToken, bearerToken, cookieToken };
+};
+
+const buildGatewaySessionCookie = (token: string): string =>
+  [
+    `openclaw_gateway_token=${encodeURIComponent(token)}`,
+    'Path=/',
+    'HttpOnly',
+    'Secure',
+    'SameSite=Lax',
+    'Max-Age=86400',
+  ].join('; ');
+
 /**
  * Create a Cloudflare Access authentication middleware
  *
@@ -50,6 +94,29 @@ export function createAccessMiddleware(options: AccessMiddlewareOptions) {
   const { type, redirectOnMissing = false } = options;
 
   return async (c: Context<AppEnv>, next: Next) => {
+    // Allow gateway-token-authenticated requests (service bindings, programmatic access).
+    // These callers don't have a CF Access JWT but present the shared gateway token,
+    // which OpenClaw itself will re-validate inside the container.
+    const { queryToken, bearerToken, cookieToken } = readGatewayTokenSources(c);
+    const incomingToken = queryToken || bearerToken || cookieToken;
+    if (incomingToken && c.env.MOLTBOT_GATEWAY_TOKEN && incomingToken === c.env.MOLTBOT_GATEWAY_TOKEN) {
+      const acceptsHtml = c.req.header('Accept')?.includes('text/html');
+      if (queryToken && c.req.method === 'GET' && acceptsHtml) {
+        const url = new URL((c.req.raw as Request).url);
+        url.searchParams.delete('token');
+        const response = c.redirect(url.toString(), 302);
+        response.headers.append('Set-Cookie', buildGatewaySessionCookie(incomingToken));
+        return response;
+      }
+      c.set('accessUser', { email: 'service@internal', name: 'Service Client' });
+      c.set('gatewayTokenAuth', true);
+      await next();
+      if (bearerToken === incomingToken) {
+        c.header('Set-Cookie', buildGatewaySessionCookie(incomingToken), { append: true });
+      }
+      return;
+    }
+
     // Skip auth in dev mode or E2E test mode
     if (isDevMode(c.env) || isE2ETestMode(c.env)) {
       c.set('accessUser', { email: 'dev@localhost', name: 'Dev User' });
@@ -58,17 +125,6 @@ export function createAccessMiddleware(options: AccessMiddlewareOptions) {
 
     const teamDomain = c.env.CF_ACCESS_TEAM_DOMAIN;
     const expectedAud = c.env.CF_ACCESS_AUD;
-
-    // Allow gateway-token-authenticated requests (service bindings, programmatic access).
-    // These callers don't have a CF Access JWT but present the shared gateway token,
-    // which OpenClaw itself will re-validate inside the container.
-    const queryToken = new URL(c.req.url).searchParams.get('token');
-    const bearerToken = c.req.header('Authorization')?.replace(/^Bearer\s+/i, '');
-    const incomingToken = queryToken || bearerToken;
-    if (incomingToken && c.env.MOLTBOT_GATEWAY_TOKEN && incomingToken === c.env.MOLTBOT_GATEWAY_TOKEN) {
-      c.set('accessUser', { email: 'service@internal', name: 'Service Client' });
-      return next();
-    }
 
     // Check if CF Access is configured
     if (!teamDomain || !expectedAud) {

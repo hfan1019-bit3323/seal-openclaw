@@ -63,6 +63,7 @@ export type AppEnv = {
   Variables: {
     sandbox: Sandbox;
     accessUser?: AccessUser;
+    gatewayTokenAuth?: boolean;
   };
 };
 

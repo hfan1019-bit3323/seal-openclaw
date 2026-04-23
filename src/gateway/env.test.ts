@@ -94,8 +94,9 @@ describe('buildEnvVars', () => {
     expect(result.ANTHROPIC_BASE_URL).toBe('https://api.anthropic.com');
   });
 
-  // Gateway token mapping
-  it('maps MOLTBOT_GATEWAY_TOKEN to OPENCLAW_GATEWAY_TOKEN for container', () => {
+  // Keep the inner Gateway on Moltworker's native token-auth path so the
+  // outer worker/runtime/control UI all share the same contract.
+  it('maps MOLTBOT_GATEWAY_TOKEN to OPENCLAW_GATEWAY_TOKEN for the container', () => {
     const env = createMockEnv({ MOLTBOT_GATEWAY_TOKEN: 'my-token' });
     const result = buildEnvVars(env);
     expect(result.OPENCLAW_GATEWAY_TOKEN).toBe('my-token');

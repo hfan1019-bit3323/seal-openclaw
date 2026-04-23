@@ -21,10 +21,20 @@ CONFIG_DIR="/root/.openclaw"
 CONFIG_FILE="$CONFIG_DIR/openclaw.json"
 WORKSPACE_DIR="/root/clawd"
 SKILLS_DIR="/root/clawd/skills"
+PERSIST_STATE_DIR="/home/openclaw/clawd/.persist/openclaw"
 
 echo "Config directory: $CONFIG_DIR"
 
 mkdir -p "$CONFIG_DIR"
+
+# Restore mirrored runtime state from the persistent workspace area.
+# The Sandbox snapshot path reliably preserves /home/openclaw/clawd, so we
+# mirror .openclaw there before backup and hydrate it back on boot.
+if [ -d "$PERSIST_STATE_DIR" ]; then
+    echo "Restoring mirrored OpenClaw state from $PERSIST_STATE_DIR"
+    mkdir -p /home/openclaw/.openclaw
+    cp -a "$PERSIST_STATE_DIR/." /home/openclaw/.openclaw/
+fi
 
 # ============================================================
 # ONBOARD (only if no config exists yet)
@@ -64,8 +74,8 @@ fi
 # ============================================================
 # openclaw onboard handles provider/model config, but we need to patch in:
 # - Channel config (Telegram, Discord, Slack)
-# - Gateway token auth
-# - Trusted proxies for sandbox networking
+# - Gateway token auth shared by runtime / Control UI / outer Worker
+# - Trusted proxies for sandbox networking metadata
 # - Base URL override for legacy AI Gateway path
 node << 'EOFPATCH'
 const fs = require('fs');
@@ -91,10 +101,20 @@ config.gateway.trustedProxies = ['10.1.0.0'];
 config.gateway.controlUi = config.gateway.controlUi || {};
 config.gateway.controlUi.allowedOrigins = ['*'];
 
+config.gateway.auth = config.gateway.auth || {};
 if (process.env.OPENCLAW_GATEWAY_TOKEN) {
-    config.gateway.auth = config.gateway.auth || {};
+    config.gateway.auth.mode = 'token';
     config.gateway.auth.token = process.env.OPENCLAW_GATEWAY_TOKEN;
+} else {
+    delete config.gateway.auth.mode;
+    delete config.gateway.auth.token;
 }
+delete config.gateway.auth.password;
+
+config.agents = config.agents || {};
+config.agents.defaults = config.agents.defaults || {};
+config.agents.defaults.heartbeat = config.agents.defaults.heartbeat || {};
+config.agents.defaults.heartbeat.every = '0m';
 
 // Allow any origin to connect to the gateway control UI.
 // The gateway runs inside a Cloudflare Container behind the Worker, which
@@ -108,6 +128,7 @@ config.gateway.controlUi.allowedOrigins = ['*'];
 if (process.env.OPENCLAW_DEV_MODE === 'true') {
     config.gateway.controlUi = config.gateway.controlUi || {};
     config.gateway.controlUi.allowInsecureAuth = true;
+    config.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
 }
 
 // Legacy AI Gateway base URL override:
@@ -216,10 +237,8 @@ rm -f "$CONFIG_DIR/gateway.lock" 2>/dev/null || true
 
 echo "Dev mode: ${OPENCLAW_DEV_MODE:-false}"
 
-# Gateway token (if set) is already written to openclaw.json by the config
-# patch above (gateway.auth.token). We deliberately avoid passing --token on
-# the command line because CLI arguments are visible to all processes in the
-# container via ps/proc.
+# Keep the inner Gateway on Moltworker's native token auth path so the
+# outer Worker, runtime bridge, and Control UI all share the same contract.
 if [ -n "$OPENCLAW_GATEWAY_TOKEN" ]; then
     echo "Starting gateway with token auth..."
 else

@@ -22,7 +22,7 @@ RUN ARCH="$(dpkg --print-architecture)" \
 
 # Install OpenClaw
 # Pin to specific version for reproducible builds
-RUN npm install -g openclaw@2026.3.23-2 \
+RUN npm install -g openclaw@2026.4.21 \
     && openclaw --version
 
 # Use /home/openclaw as the home directory instead of /root.
@@ -36,7 +36,9 @@ RUN mkdir -p /home/openclaw/.openclaw \
     && ln -s /home/openclaw/clawd /root/clawd
 
 # Copy startup script
-# Build cache bust: 2026-03-26-v32-home-dir
+# Use a real Docker instruction instead of a comment so changes to the
+# startup flow always invalidate cached layers during wrangler deploy.
+ARG IMAGE_CACHE_BUST=2026-04-20-v34-start-openclaw
 COPY start-openclaw.sh /usr/local/bin/start-openclaw.sh
 RUN chmod +x /usr/local/bin/start-openclaw.sh
 

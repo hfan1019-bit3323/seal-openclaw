@@ -1,8 +1,10 @@
 import { Hono } from 'hono';
+import { posix as pathPosix } from 'node:path';
 import type { AppEnv } from '../types';
 import { createAccessMiddleware } from '../auth';
 import { ensureGateway, findExistingGatewayProcess, killGateway, waitForProcess } from '../gateway';
 import { createSnapshot, getLastBackupId, signalRestoreNeeded } from '../persistence';
+import { runtimeApi } from './runtime';
 
 // CLI commands can take 10-15 seconds to complete due to WebSocket connection overhead
 const CLI_TIMEOUT_MS = 20000;
@@ -19,6 +21,28 @@ const api = new Hono<AppEnv>();
  * Admin API routes - all protected by Cloudflare Access
  */
 const adminApi = new Hono<AppEnv>();
+
+type SeedFileInput = {
+  path?: string;
+  contentBase64?: string;
+};
+
+const SEED_ALLOWED_ROOTS = [
+  '/home/openclaw/.openclaw/',
+  '/home/openclaw/clawd/',
+  '/home/openclaw/clawd/.persist/',
+] as const;
+
+const normalizeSeedPath = (rawPath: string): string => {
+  const normalized = pathPosix.normalize(rawPath.trim());
+  if (!normalized.startsWith('/')) {
+    throw new Error(`Seed path must be absolute: ${rawPath}`);
+  }
+  if (!SEED_ALLOWED_ROOTS.some((prefix) => normalized.startsWith(prefix))) {
+    throw new Error(`Seed path is outside allowed roots: ${rawPath}`);
+  }
+  return normalized;
+};
 
 // Middleware: Verify Cloudflare Access JWT for all admin routes
 adminApi.use('*', createAccessMiddleware({ type: 'json' }));
@@ -252,6 +276,58 @@ adminApi.post('/storage/sync', async (c) => {
   }
 });
 
+// POST /api/admin/storage/seed - Seed selected local state/workspace files into /home/openclaw
+adminApi.post('/storage/seed', async (c) => {
+  const sandbox = c.get('sandbox');
+
+  try {
+    const body = (await c.req.json()) as {
+      files?: SeedFileInput[];
+      createSnapshot?: boolean;
+    };
+
+    const files = Array.isArray(body.files) ? body.files : [];
+    if (files.length === 0) {
+      return c.json({ success: false, error: 'files is required' }, 400);
+    }
+
+    const written: Array<{ path: string; bytes: number }> = [];
+
+    for (const file of files) {
+      const rawPath = typeof file.path === 'string' ? file.path : '';
+      const hasContent = typeof file.contentBase64 === 'string';
+      const contentBase64 = hasContent ? file.contentBase64 || '' : '';
+      if (!rawPath || !hasContent) {
+        return c.json({ success: false, error: 'Each file needs path and contentBase64' }, 400);
+      }
+
+      const targetPath = normalizeSeedPath(rawPath);
+      const content = Buffer.from(contentBase64, 'base64').toString('utf-8');
+      await sandbox.mkdir(pathPosix.dirname(targetPath), { recursive: true });
+      await sandbox.writeFile(targetPath, content, { encoding: 'utf-8' });
+      written.push({ path: targetPath, bytes: Buffer.byteLength(content, 'utf-8') });
+    }
+
+    let backupId: string | null = null;
+    if (body.createSnapshot) {
+      const handle = await createSnapshot(sandbox, c.env.BACKUP_BUCKET);
+      backupId = handle.id;
+    }
+
+    return c.json({
+      success: true,
+      written,
+      backupId,
+      message: backupId
+        ? 'Seed files written and snapshot created'
+        : 'Seed files written successfully',
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ success: false, error: errorMessage }, 500);
+  }
+});
+
 // POST /api/admin/gateway/restart - Kill the current gateway and start a new one
 adminApi.post('/gateway/restart', async (c) => {
   const sandbox = c.get('sandbox');
@@ -283,5 +359,6 @@ adminApi.post('/gateway/restart', async (c) => {
 
 // Mount admin API routes under /admin
 api.route('/admin', adminApi);
+api.route('/runtime', runtimeApi);
 
 export { api };

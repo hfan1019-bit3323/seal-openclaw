@@ -1,6 +1,7 @@
 import type { Sandbox } from '@cloudflare/sandbox';
 
 const BACKUP_DIR = '/home/openclaw';
+const PERSISTED_OPENCLAW_STATE_DIR = '/home/openclaw/clawd/.persist/openclaw';
 const HANDLE_KEY = 'backup-handle.json';
 
 const RESTORE_NEEDED_KEY = 'restore-needed';
@@ -35,6 +36,22 @@ async function storeHandle(bucket: R2Bucket, handle: { id: string; dir: string }
 
 async function deleteHandle(bucket: R2Bucket): Promise<void> {
   await bucket.delete(HANDLE_KEY);
+}
+
+async function syncOpenClawStateToPersist(sandbox: Sandbox): Promise<void> {
+  try {
+    await sandbox.exec(
+      [
+        `mkdir -p ${PERSISTED_OPENCLAW_STATE_DIR}`,
+        `find ${PERSISTED_OPENCLAW_STATE_DIR} -mindepth 1 -maxdepth 1 -exec rm -rf {} +`,
+        `cp -a /home/openclaw/.openclaw/. ${PERSISTED_OPENCLAW_STATE_DIR}/`,
+      ].join(' && '),
+    );
+    console.log('[persistence] Mirrored /home/openclaw/.openclaw into clawd/.persist');
+  } catch (error) {
+    console.error('[persistence] Failed to mirror OpenClaw state before backup:', error);
+    throw error;
+  }
 }
 
 /**
@@ -114,6 +131,8 @@ export async function createSnapshot(
     await bucket.delete(`backups/${previousHandle.id}/data.sqsh`);
     await bucket.delete(`backups/${previousHandle.id}/meta.json`);
   }
+
+  await syncOpenClawStateToPersist(sandbox);
 
   // Log directory contents before backup so we can verify what's captured
   try {

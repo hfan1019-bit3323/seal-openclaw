@@ -33,6 +33,7 @@ import { restoreIfNeeded, createSnapshot } from './persistence';
 import { handleScheduled } from './cron/handler';
 import loadingPageHtml from './assets/loading.html';
 import configErrorHtml from './assets/config-error.html';
+import { extractGatewayToken } from './auth/middleware';
 
 /**
  * Transform error messages from the gateway to be more user-friendly.
@@ -57,6 +58,60 @@ function transformErrorMessage(message: string, host: string): string {
 function isGatewayCrashedError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   return error.message.includes('is not listening');
+}
+
+/**
+ * Check if the underlying sandbox/container is asleep or not yet started.
+ * In that case we need to explicitly boot the container and gateway before
+ * retrying a WebSocket connection from the runtime worker.
+ */
+function isContainerNotRunningError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.message.includes('container is not running') ||
+    error.message.includes('consider calling start()')
+  );
+}
+
+function normalizeWebSocketCloseCode(code: number): number {
+  if (code === 1000 || code === 1001 || code === 1002 || code === 1003 || code === 1007 || code === 1008 || code === 1009 || code === 1010 || code === 1011) {
+    return code;
+  }
+  if (code >= 3000 && code <= 4999) {
+    return code;
+  }
+  return 1000;
+}
+
+function buildForwardedHeaders(
+  request: Request,
+  accessUserEmail?: string,
+): Headers {
+  const url = new URL(request.url);
+  const headers = new Headers(request.headers);
+  const forwardedProto =
+    headers.get('x-forwarded-proto') || url.protocol.replace(':', '') || 'https';
+  const forwardedHost = headers.get('x-forwarded-host') || headers.get('host') || url.host;
+  const forwardedUser = headers.get('x-forwarded-user') || accessUserEmail;
+
+  headers.set('x-forwarded-proto', forwardedProto);
+  headers.set('x-forwarded-host', forwardedHost);
+  if (forwardedUser) {
+    headers.set('x-forwarded-user', forwardedUser);
+  }
+
+  return headers;
+}
+
+function buildGatewaySessionCookie(token: string): string {
+  return [
+    `openclaw_gateway_token=${encodeURIComponent(token)}`,
+    'Path=/',
+    'HttpOnly',
+    'Secure',
+    'SameSite=Lax',
+    'Max-Age=86400',
+  ].join('; ');
 }
 
 // killGateway is imported from './gateway' (shared with restart handler)
@@ -147,11 +202,9 @@ app.use('*', async (c, next) => {
 });
 
 // Middleware: Initialize sandbox stub and restore backup if available.
-// Note: we intentionally do NOT call sandbox.start() here. The Sandbox SDK's
-// containerFetch() auto-starts the container when needed, and the catch-all
-// proxy route uses ensureGateway() which handles startup explicitly.
-// Adding start() here would add an unnecessary RPC call on every request,
-// including static assets and health checks that don't need the container.
+// We do not eagerly start the container here because many routes (static
+// assets, health checks, admin pages) do not need it. Routes that depend on
+// the gateway explicitly call ensureGateway() when they need a warm container.
 app.use('*', async (c, next) => {
   const options = buildSandboxOptions(c.env);
   const sandbox = getSandbox(c.env.Sandbox, 'openclaw', options);
@@ -256,6 +309,12 @@ app.all('*', async (c) => {
   const sandbox = c.get('sandbox');
   const request = c.req.raw;
   const url = new URL(request.url);
+  const accessUser = c.get('accessUser');
+  const gatewayTokenCandidate = extractGatewayToken(c);
+  const gatewayToken =
+    gatewayTokenCandidate && gatewayTokenCandidate === c.env.MOLTBOT_GATEWAY_TOKEN
+      ? gatewayTokenCandidate
+      : null;
 
   console.log('[PROXY] Handling request:', url.pathname);
 
@@ -301,9 +360,27 @@ app.all('*', async (c) => {
     }
   }
 
-  // For HTML and WebSocket requests, try to proxy directly. If the gateway
-  // isn't running, containerFetch/wsConnect will throw and we serve the
-  // loading page (HTML) or return an error (WebSocket).
+  // WebSocket traffic is used by both the browser control UI and the runtime
+  // worker. Unlike plain HTML requests, it cannot tolerate a "loading" page.
+  // Start or verify the inner OpenClaw gateway process first so wsConnect
+  // targets a listening port rather than just a booted container VM.
+  if (isWebSocketRequest) {
+    try {
+      await restoreIfNeeded(sandbox, c.env.BACKUP_BUCKET);
+    } catch {
+      // non-fatal
+    }
+    try {
+      await ensureGateway(sandbox, c.env);
+    } catch (error) {
+      console.error('[WS] Failed to ensure gateway before WebSocket proxy:', error);
+      return new Response('Gateway not ready', { status: 503 });
+    }
+  }
+
+  // For HTML requests, try to proxy directly. If the gateway isn't running,
+  // containerFetch will throw and we serve the loading page instead of a blank
+  // shell. WebSocket requests are handled above by eagerly ensuring the gateway.
 
   // Proxy to gateway with WebSocket message interception
   if (isWebSocketRequest) {
@@ -318,19 +395,39 @@ app.all('*', async (c) => {
     // Inject gateway token into WebSocket request if not already present.
     // CF Access redirects strip query params, so authenticated users lose ?token=.
     // Since the user already passed CF Access auth, we inject the token server-side.
-    let wsRequest = request;
-    if (c.env.MOLTBOT_GATEWAY_TOKEN && !url.searchParams.has('token')) {
-      const tokenUrl = new URL(url.toString());
-      tokenUrl.searchParams.set('token', c.env.MOLTBOT_GATEWAY_TOKEN);
-      wsRequest = new Request(tokenUrl.toString(), request);
+    const wsHeaders = buildForwardedHeaders(request, accessUser?.email);
+    const wsUrl = new URL(url.toString());
+    if (gatewayToken && !wsUrl.searchParams.has('token')) {
+      wsUrl.searchParams.set('token', gatewayToken);
     }
+    if (gatewayToken && !wsHeaders.has('Authorization')) {
+      wsHeaders.set('Authorization', `Bearer ${gatewayToken}`);
+    }
+    const wsRequest = new Request(wsUrl.toString(), {
+      method: request.method,
+      headers: wsHeaders,
+    });
 
     // Get WebSocket connection to the container (with retry on crash)
     let containerResponse: Response;
     try {
       containerResponse = await sandbox.wsConnect(wsRequest, GATEWAY_PORT);
     } catch (err) {
-      if (isGatewayCrashedError(err)) {
+      if (isContainerNotRunningError(err)) {
+        console.log('[WS] Container is cold, restoring and starting gateway before retry...');
+        try {
+          await restoreIfNeeded(sandbox, c.env.BACKUP_BUCKET);
+        } catch {
+          // non-fatal
+        }
+        await ensureGateway(sandbox, c.env);
+        try {
+          containerResponse = await sandbox.wsConnect(wsRequest, GATEWAY_PORT);
+        } catch (retryErr) {
+          console.error('[WS] Retry after cold start also failed:', retryErr);
+          return new Response('Gateway cold start failed', { status: 503 });
+        }
+      } else if (isGatewayCrashedError(err)) {
         console.log('[WS] Gateway crashed, attempting restore + restart and retry...');
         await killGateway(sandbox);
         try {
@@ -439,7 +536,7 @@ app.all('*', async (c) => {
       if (debugLogs) {
         console.log('[WS] Client closed:', event.code, event.reason);
       }
-      containerWs.close(event.code, event.reason);
+      containerWs.close(normalizeWebSocketCloseCode(event.code), event.reason);
     });
 
     containerWs.addEventListener('close', (event) => {
@@ -454,7 +551,7 @@ app.all('*', async (c) => {
       if (debugLogs) {
         console.log('[WS] Transformed close reason:', reason);
       }
-      serverWs.close(event.code, reason);
+      serverWs.close(normalizeWebSocketCloseCode(event.code), reason);
     });
 
     // Handle errors
@@ -481,7 +578,12 @@ app.all('*', async (c) => {
 
   let httpResponse: Response;
   try {
-    httpResponse = await sandbox.containerFetch(request, GATEWAY_PORT);
+    const proxyHeaders = buildForwardedHeaders(request, accessUser?.email);
+    if (gatewayToken && !proxyHeaders.has('Authorization')) {
+      proxyHeaders.set('Authorization', `Bearer ${gatewayToken}`);
+    }
+    const proxyRequest = new Request(request, { headers: proxyHeaders });
+    httpResponse = await sandbox.containerFetch(proxyRequest, GATEWAY_PORT);
   } catch (err) {
     if (isGatewayCrashedError(err)) {
       console.log('[HTTP] Gateway crashed, attempting restore + restart and retry...');
@@ -491,9 +593,14 @@ app.all('*', async (c) => {
       } catch {
         // non-fatal
       }
-      await ensureGateway(sandbox, c.env);
+        await ensureGateway(sandbox, c.env);
       try {
-        httpResponse = await sandbox.containerFetch(request, GATEWAY_PORT);
+        const proxyHeaders = buildForwardedHeaders(request, accessUser?.email);
+        if (gatewayToken && !proxyHeaders.has('Authorization')) {
+          proxyHeaders.set('Authorization', `Bearer ${gatewayToken}`);
+        }
+        const proxyRequest = new Request(request, { headers: proxyHeaders });
+        httpResponse = await sandbox.containerFetch(proxyRequest, GATEWAY_PORT);
       } catch (retryErr) {
         console.error('[HTTP] Retry after restart also failed:', retryErr);
         if (acceptsHtml) return c.html(loadingPageHtml);
@@ -528,6 +635,9 @@ app.all('*', async (c) => {
     const newHeaders = new Headers(httpResponse.headers);
     newHeaders.set('X-Worker-Debug', 'proxy-to-gateway');
     newHeaders.set('X-Debug-Path', url.pathname);
+    if (gatewayToken && url.searchParams.get('token') === gatewayToken) {
+      newHeaders.append('Set-Cookie', buildGatewaySessionCookie(gatewayToken));
+    }
     return new Response(body, {
       status: httpResponse.status,
       statusText: httpResponse.statusText,
