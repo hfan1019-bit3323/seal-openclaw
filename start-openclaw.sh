@@ -116,6 +116,32 @@ config.agents.defaults = config.agents.defaults || {};
 config.agents.defaults.heartbeat = config.agents.defaults.heartbeat || {};
 config.agents.defaults.heartbeat.every = '0m';
 
+// Product chat should boot as a lean OpenClaw kernel, not as the full
+// developer workstation profile. Expensive tools can be re-enabled explicitly
+// when Agent Teams need them, but they should not block ordinary first-token
+// latency for the web product path.
+config.tools = config.tools || {};
+config.tools.profile = 'minimal';
+config.tools.web = config.tools.web || {};
+config.tools.web.search = config.tools.web.search || {};
+config.tools.web.search.enabled = false;
+
+config.browser = config.browser || {};
+config.browser.enabled = false;
+
+config.plugins = config.plugins || {};
+const latencyHeavyPluginDeny = [
+    'acpx',
+    'browser',
+    'phone-control',
+    'talk-voice',
+    'amazon-bedrock',
+    'amazon-bedrock-mantle',
+    'xai'
+];
+const existingPluginDeny = Array.isArray(config.plugins.deny) ? config.plugins.deny : [];
+config.plugins.deny = Array.from(new Set([...existingPluginDeny, ...latencyHeavyPluginDeny]));
+
 // Allow any origin to connect to the gateway control UI.
 // The gateway runs inside a Cloudflare Container behind the Worker, which
 // proxies requests from the public workers.dev domain. Without this,
