@@ -153,40 +153,6 @@ const extraProductPlugins = (process.env.OPENCLAW_PRODUCT_PLUGIN_ALLOW || '')
     .filter(Boolean);
 const allowedProductPlugins = new Set([...productPluginAllow, ...extraProductPlugins]);
 config.plugins.allow = Array.from(allowedProductPlugins);
-config.plugins.entries = config.plugins.entries || {};
-
-function discoverBundledPluginIds() {
-    const candidates = [
-        process.env.OPENCLAW_EXTENSIONS_DIR,
-        '/usr/local/lib/node_modules/openclaw/dist/extensions',
-        '/opt/homebrew/lib/node_modules/openclaw/dist/extensions'
-    ].filter(Boolean);
-    const ids = [];
-    for (const extensionsDir of candidates) {
-        try {
-            if (!fs.existsSync(extensionsDir)) continue;
-            for (const entry of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
-                if (!entry.isDirectory()) continue;
-                const manifestPath = `${extensionsDir}/${entry.name}/openclaw.plugin.json`;
-                if (!fs.existsSync(manifestPath)) continue;
-                const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-                if (typeof manifest.id === 'string' && manifest.id.trim()) ids.push(manifest.id.trim());
-            }
-            if (ids.length > 0) return Array.from(new Set(ids));
-        } catch (error) {
-            console.warn('Could not inspect bundled OpenClaw plugins at ' + extensionsDir + ': ' + String(error));
-        }
-    }
-    return ids;
-}
-
-for (const pluginId of discoverBundledPluginIds()) {
-    const existingEntry = config.plugins.entries[pluginId] || {};
-    config.plugins.entries[pluginId] = {
-        ...existingEntry,
-        enabled: allowedProductPlugins.has(pluginId)
-    };
-}
 
 // Keep the deny list as a belt-and-suspenders guard for particularly expensive
 // or workstation-only plugins, including aliases that may not be present in a
@@ -213,6 +179,30 @@ const latencyHeavyPluginDeny = [
 ].filter((pluginId) => !allowedProductPlugins.has(pluginId));
 const existingPluginDeny = Array.isArray(config.plugins.deny) ? config.plugins.deny : [];
 config.plugins.deny = Array.from(new Set([...existingPluginDeny, ...latencyHeavyPluginDeny]));
+
+// Keep plugin entries small. A previous broad "write every bundled plugin into
+// entries" approach made OpenClaw 4.21 spend too long in config/plugin
+// initialization. The allowlist already blocks non-product plugins at load
+// time; entries are only needed for allowed plugins and known heavy defaults
+// whose runtime dependency installer checks entry.enabled before startup.
+const existingPluginEntries =
+    config.plugins.entries && typeof config.plugins.entries === 'object' && !Array.isArray(config.plugins.entries)
+        ? config.plugins.entries
+        : {};
+const nextPluginEntries = {};
+for (const pluginId of allowedProductPlugins) {
+    nextPluginEntries[pluginId] = {
+        ...(existingPluginEntries[pluginId] || {}),
+        enabled: true
+    };
+}
+for (const pluginId of latencyHeavyPluginDeny) {
+    nextPluginEntries[pluginId] = {
+        ...(existingPluginEntries[pluginId] || {}),
+        enabled: false
+    };
+}
+config.plugins.entries = nextPluginEntries;
 config.plugins.slots = config.plugins.slots || {};
 config.plugins.slots.memory = 'memory-core';
 
