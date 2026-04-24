@@ -134,11 +134,11 @@ config.plugins.enabled = true;
 
 // Product cloud baseline:
 // OpenClaw ships many bundled plugins enabled by default for workstation use
-// (phone/SMS, browser, voice, Bedrock, channel adapters, etc.). The seal ai
-// web product path only needs the kernel, Control UI pairing, provider config,
-// and memory. Pin an allowlist and explicitly disable every other bundled
-// plugin before the gateway boots, otherwise 2026.4.21 can still spend cold
-// start time installing runtime deps for default-enabled plugins.
+// (phone/SMS, browser, voice, Bedrock, channel adapters, etc.). For the seal ai
+// web product path, do not turn on a global plugins.allow in 2026.4.21: cloud
+// recovery has shown the Gateway can hang in startup with a restrictive
+// allowlist. Instead, keep the default plugin graph intact and explicitly deny
+// workstation-only / dependency-heavy plugins.
 const productPluginAllow = [
     'device-pair',
     'cloudflare-ai-gateway',
@@ -152,7 +152,7 @@ const extraProductPlugins = (process.env.OPENCLAW_PRODUCT_PLUGIN_ALLOW || '')
     .map((entry) => entry.trim())
     .filter(Boolean);
 const allowedProductPlugins = new Set([...productPluginAllow, ...extraProductPlugins]);
-config.plugins.allow = Array.from(allowedProductPlugins);
+delete config.plugins.allow;
 
 // Keep the deny list as a belt-and-suspenders guard for particularly expensive
 // or workstation-only plugins, including aliases that may not be present in a
@@ -180,22 +180,15 @@ const latencyHeavyPluginDeny = [
 const existingPluginDeny = Array.isArray(config.plugins.deny) ? config.plugins.deny : [];
 config.plugins.deny = Array.from(new Set([...existingPluginDeny, ...latencyHeavyPluginDeny]));
 
-// Keep plugin entries small. A previous broad "write every bundled plugin into
-// entries" approach made OpenClaw 4.21 spend too long in config/plugin
-// initialization. The allowlist already blocks non-product plugins at load
-// time; entries are only needed for allowed plugins and known heavy defaults
+// Keep plugin entries small. Entries are only needed for known heavy defaults
 // whose runtime dependency installer checks entry.enabled before startup.
+// Do not write every bundled plugin into entries; that made OpenClaw 4.21 spend
+// too long in config/plugin initialization.
 const existingPluginEntries =
     config.plugins.entries && typeof config.plugins.entries === 'object' && !Array.isArray(config.plugins.entries)
         ? config.plugins.entries
         : {};
 const nextPluginEntries = {};
-for (const pluginId of allowedProductPlugins) {
-    nextPluginEntries[pluginId] = {
-        ...(existingPluginEntries[pluginId] || {}),
-        enabled: true
-    };
-}
 for (const pluginId of latencyHeavyPluginDeny) {
     nextPluginEntries[pluginId] = {
         ...(existingPluginEntries[pluginId] || {}),
