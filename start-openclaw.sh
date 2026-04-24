@@ -181,6 +181,54 @@ if (process.env.CF_AI_GATEWAY_MODEL) {
     }
 }
 
+// Normalize the OpenRouter Claude default to Sonnet 4.6.
+// We keep the proven CF AI Gateway -> OpenRouter path, but stop falling back
+// to the older 4.5 catalog on restart. This keeps cloud behavior aligned with
+// the current Anthropic default without changing the outer routing model.
+const openRouterProvider = config.models?.providers?.['cf-ai-gw-openrouter'];
+if (openRouterProvider && typeof openRouterProvider === 'object') {
+    const desiredModelId = 'anthropic/claude-sonnet-4.6';
+    openRouterProvider.api = openRouterProvider.api || 'openai-completions';
+    openRouterProvider.models = [
+        {
+            id: desiredModelId,
+            name: desiredModelId,
+            contextWindow: 1000000,
+            maxTokens: 8192
+        }
+    ];
+    config.agents = config.agents || {};
+    config.agents.defaults = config.agents.defaults || {};
+    config.agents.defaults.model = { primary: `cf-ai-gw-openrouter/${desiredModelId}` };
+}
+
+// Keep the direct Cloudflare AI Gateway provider catalog in sync as a fallback
+// reference, even though the primary path remains OpenRouter.
+const directGatewayProvider = config.models?.providers?.['cloudflare-ai-gateway'];
+if (
+    directGatewayProvider &&
+    typeof directGatewayProvider === 'object' &&
+    typeof directGatewayProvider.baseUrl === 'string' &&
+    directGatewayProvider.baseUrl.includes('/anthropic')
+) {
+    directGatewayProvider.models = [
+        {
+            id: 'claude-sonnet-4-6',
+            name: 'Claude Sonnet 4.6',
+            reasoning: true,
+            input: ['text', 'image'],
+            cost: {
+                input: 3,
+                output: 15,
+                cacheRead: 0.3,
+                cacheWrite: 3.75
+            },
+            contextWindow: 1000000,
+            maxTokens: 64000
+        }
+    ];
+}
+
 // Telegram configuration
 // Overwrite entire channel object to drop stale keys from old R2 backups
 // that would fail OpenClaw's strict config validation (see #47)
