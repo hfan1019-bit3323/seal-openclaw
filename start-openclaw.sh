@@ -185,21 +185,30 @@ if (process.env.CF_AI_GATEWAY_MODEL) {
 // We keep the proven CF AI Gateway -> OpenRouter path, but stop falling back
 // to the older 4.5 catalog on restart. This keeps cloud behavior aligned with
 // the current Anthropic default without changing the outer routing model.
-const openRouterProvider = config.models?.providers?.['cf-ai-gw-openrouter'];
-if (openRouterProvider && typeof openRouterProvider === 'object') {
-    const desiredModelId = 'anthropic/claude-sonnet-4.6';
-    openRouterProvider.api = openRouterProvider.api || 'openai-completions';
-    openRouterProvider.models = [
-        {
-            id: desiredModelId,
-            name: desiredModelId,
-            contextWindow: 1000000,
-            maxTokens: 8192
-        }
-    ];
+const desiredOpenRouterModelId = 'anthropic/claude-sonnet-4.6';
+const accountId = process.env.CF_AI_GATEWAY_ACCOUNT_ID;
+const gatewayId = process.env.CF_AI_GATEWAY_GATEWAY_ID;
+const gatewayApiKey = process.env.CLOUDFLARE_AI_GATEWAY_API_KEY;
+if (accountId && gatewayId && gatewayApiKey) {
+    const openRouterBaseUrl = `https://gateway.ai.cloudflare.com/v1/${accountId}/${gatewayId}/openrouter`;
+    config.models = config.models || {};
+    config.models.providers = config.models.providers || {};
+    config.models.providers['cf-ai-gw-openrouter'] = {
+        baseUrl: openRouterBaseUrl,
+        apiKey: gatewayApiKey,
+        api: 'openai-completions',
+        models: [
+            {
+                id: desiredOpenRouterModelId,
+                name: desiredOpenRouterModelId,
+                contextWindow: 1000000,
+                maxTokens: 8192
+            }
+        ]
+    };
     config.agents = config.agents || {};
     config.agents.defaults = config.agents.defaults || {};
-    config.agents.defaults.model = { primary: `cf-ai-gw-openrouter/${desiredModelId}` };
+    config.agents.defaults.model = { primary: `cf-ai-gw-openrouter/${desiredOpenRouterModelId}` };
 }
 
 // Keep the direct Cloudflare AI Gateway provider catalog in sync as a fallback
