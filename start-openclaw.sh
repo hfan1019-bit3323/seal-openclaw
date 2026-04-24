@@ -133,25 +133,10 @@ config.plugins = config.plugins || {};
 config.plugins.enabled = true;
 
 // Product cloud baseline:
-// OpenClaw ships many bundled plugins enabled by default for workstation use
-// (phone/SMS, browser, voice, Bedrock, channel adapters, etc.). For the seal ai
-// web product path, do not turn on a global plugins.allow in 2026.4.21: cloud
-// recovery has shown the Gateway can hang in startup with a restrictive
-// allowlist. Instead, keep the default plugin graph intact and explicitly deny
-// workstation-only / dependency-heavy plugins.
-const productPluginAllow = [
-    'device-pair',
-    'cloudflare-ai-gateway',
-    'openrouter',
-    'anthropic',
-    'openai',
-    'memory-core'
-];
-const extraProductPlugins = (process.env.OPENCLAW_PRODUCT_PLUGIN_ALLOW || '')
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-const allowedProductPlugins = new Set([...productPluginAllow, ...extraProductPlugins]);
+// OpenClaw ships many bundled plugins enabled by default for workstation use.
+// For 2026.4.21, keep the default plugin graph intact and only use deny.
+// Cloud recovery testing showed both restrictive plugins.allow and explicit
+// entries.enabled=false can hang the Gateway during startup.
 delete config.plugins.allow;
 
 // Keep the deny list as a belt-and-suspenders guard for particularly expensive
@@ -162,40 +147,13 @@ const latencyHeavyPluginDeny = [
     'browser',
     'phone-control',
     'talk-voice',
-    'voice-call',
     'amazon-bedrock',
     'amazon-bedrock-mantle',
-    'xai',
-    'discord',
-    'telegram',
-    'slack',
-    'feishu',
-    'whatsapp',
-    'signal',
-    'imessage',
-    'bluebubbles',
-    'deepgram',
-    'elevenlabs'
-].filter((pluginId) => !allowedProductPlugins.has(pluginId));
+    'xai'
+];
 const existingPluginDeny = Array.isArray(config.plugins.deny) ? config.plugins.deny : [];
 config.plugins.deny = Array.from(new Set([...existingPluginDeny, ...latencyHeavyPluginDeny]));
-
-// Keep plugin entries small. Entries are only needed for known heavy defaults
-// whose runtime dependency installer checks entry.enabled before startup.
-// Do not write every bundled plugin into entries; that made OpenClaw 4.21 spend
-// too long in config/plugin initialization.
-const existingPluginEntries =
-    config.plugins.entries && typeof config.plugins.entries === 'object' && !Array.isArray(config.plugins.entries)
-        ? config.plugins.entries
-        : {};
-const nextPluginEntries = {};
-for (const pluginId of latencyHeavyPluginDeny) {
-    nextPluginEntries[pluginId] = {
-        ...(existingPluginEntries[pluginId] || {}),
-        enabled: false
-    };
-}
-config.plugins.entries = nextPluginEntries;
+delete config.plugins.entries;
 config.plugins.slots = config.plugins.slots || {};
 config.plugins.slots.memory = 'memory-core';
 
