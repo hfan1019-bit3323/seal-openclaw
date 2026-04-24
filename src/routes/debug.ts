@@ -10,6 +10,37 @@ import { handleScheduled } from '../cron/handler';
  */
 const debug = new Hono<AppEnv>();
 
+const SENSITIVE_CONFIG_KEYS = new Set([
+  'apiKey',
+  'token',
+  'password',
+  'secret',
+  'clientSecret',
+  'accessToken',
+  'refreshToken',
+]);
+
+function redactConfigValue(value: unknown, key?: string): unknown {
+  if (key && SENSITIVE_CONFIG_KEYS.has(key)) {
+    return '[redacted]';
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactConfigValue(entry));
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([entryKey, entryValue]) => [
+        entryKey,
+        redactConfigValue(entryValue, entryKey),
+      ]),
+    );
+  }
+
+  return value;
+}
+
 // GET /debug/version - Returns version info from inside the container
 debug.get('/version', async (c) => {
   const sandbox = c.get('sandbox');
@@ -381,8 +412,8 @@ debug.get('/container-config', async (c) => {
     return c.json({
       status: proc.status,
       exitCode: proc.exitCode,
-      config,
-      raw: config ? undefined : stdout,
+      config: config ? redactConfigValue(config) : null,
+      raw: config ? undefined : '[unparseable config redacted]',
       stderr,
     });
   } catch (error) {
