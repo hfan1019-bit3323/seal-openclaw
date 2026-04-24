@@ -151,8 +151,7 @@ const latencyHeavyPluginDeny = [
     'amazon-bedrock-mantle',
     'xai'
 ];
-const existingPluginDeny = Array.isArray(config.plugins.deny) ? config.plugins.deny : [];
-config.plugins.deny = Array.from(new Set([...existingPluginDeny, ...latencyHeavyPluginDeny]));
+config.plugins.deny = [...latencyHeavyPluginDeny];
 delete config.plugins.entries;
 config.plugins.slots = config.plugins.slots || {};
 config.plugins.slots.memory = 'memory-core';
