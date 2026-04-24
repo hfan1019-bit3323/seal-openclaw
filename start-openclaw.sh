@@ -130,17 +130,91 @@ config.browser = config.browser || {};
 config.browser.enabled = false;
 
 config.plugins = config.plugins || {};
+config.plugins.enabled = true;
+
+// Product cloud baseline:
+// OpenClaw ships many bundled plugins enabled by default for workstation use
+// (phone/SMS, browser, voice, Bedrock, channel adapters, etc.). The seal ai
+// web product path only needs the kernel, Control UI pairing, provider config,
+// and memory. Pin an allowlist and explicitly disable every other bundled
+// plugin before the gateway boots, otherwise 2026.4.21 can still spend cold
+// start time installing runtime deps for default-enabled plugins.
+const productPluginAllow = [
+    'device-pair',
+    'cloudflare-ai-gateway',
+    'openrouter',
+    'anthropic',
+    'openai',
+    'memory-core'
+];
+const extraProductPlugins = (process.env.OPENCLAW_PRODUCT_PLUGIN_ALLOW || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+const allowedProductPlugins = new Set([...productPluginAllow, ...extraProductPlugins]);
+config.plugins.allow = Array.from(allowedProductPlugins);
+config.plugins.entries = config.plugins.entries || {};
+
+function discoverBundledPluginIds() {
+    const candidates = [
+        process.env.OPENCLAW_EXTENSIONS_DIR,
+        '/usr/local/lib/node_modules/openclaw/dist/extensions',
+        '/opt/homebrew/lib/node_modules/openclaw/dist/extensions'
+    ].filter(Boolean);
+    const ids = [];
+    for (const extensionsDir of candidates) {
+        try {
+            if (!fs.existsSync(extensionsDir)) continue;
+            for (const entry of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
+                if (!entry.isDirectory()) continue;
+                const manifestPath = `${extensionsDir}/${entry.name}/openclaw.plugin.json`;
+                if (!fs.existsSync(manifestPath)) continue;
+                const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+                if (typeof manifest.id === 'string' && manifest.id.trim()) ids.push(manifest.id.trim());
+            }
+            if (ids.length > 0) return Array.from(new Set(ids));
+        } catch (error) {
+            console.warn('Could not inspect bundled OpenClaw plugins at ' + extensionsDir + ': ' + String(error));
+        }
+    }
+    return ids;
+}
+
+for (const pluginId of discoverBundledPluginIds()) {
+    const existingEntry = config.plugins.entries[pluginId] || {};
+    config.plugins.entries[pluginId] = {
+        ...existingEntry,
+        enabled: allowedProductPlugins.has(pluginId)
+    };
+}
+
+// Keep the deny list as a belt-and-suspenders guard for particularly expensive
+// or workstation-only plugins, including aliases that may not be present in a
+// given OpenClaw build.
 const latencyHeavyPluginDeny = [
     'acpx',
     'browser',
     'phone-control',
     'talk-voice',
+    'voice-call',
     'amazon-bedrock',
     'amazon-bedrock-mantle',
-    'xai'
-];
+    'xai',
+    'discord',
+    'telegram',
+    'slack',
+    'feishu',
+    'whatsapp',
+    'signal',
+    'imessage',
+    'bluebubbles',
+    'deepgram',
+    'elevenlabs'
+].filter((pluginId) => !allowedProductPlugins.has(pluginId));
 const existingPluginDeny = Array.isArray(config.plugins.deny) ? config.plugins.deny : [];
 config.plugins.deny = Array.from(new Set([...existingPluginDeny, ...latencyHeavyPluginDeny]));
+config.plugins.slots = config.plugins.slots || {};
+config.plugins.slots.memory = 'memory-core';
 
 // Allow any origin to connect to the gateway control UI.
 // The gateway runs inside a Cloudflare Container behind the Worker, which
