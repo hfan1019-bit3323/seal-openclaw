@@ -54,6 +54,15 @@ export interface OpenClawEnv {
   // schedule still runs every minute; this throttles the keep-alive work so
   // we don't list-processes the sandbox 1440x/day. Default: 4.
   KEEPALIVE_GATEWAY_EVERY_MINUTES?: string;
+  // Container DO name. Default 'openclaw-apac' so a fresh DO is born with
+  // locationHint=apac (the @cloudflare/sandbox SDK doesn't pass locationHint
+  // through, so we seed the location at the binding layer before the SDK
+  // reaches in). Override only if you need to roll back to the legacy AMS DO
+  // ('openclaw') for emergency.
+  OPENCLAW_DO_NAME?: string;
+  // Region hint applied at first DO creation. Default 'apac'. Standard CF
+  // values: wnam, enam, sam, weur, eeur, apac, oc, afr, me.
+  OPENCLAW_DO_LOCATION_HINT?: string;
 }
 
 /**

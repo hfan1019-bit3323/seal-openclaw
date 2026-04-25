@@ -183,6 +183,77 @@ export function buildSandboxOptions(env: OpenClawEnv): SandboxOptions {
   return { sleepAfter };
 }
 
+/**
+ * The Sandbox container DO name.
+ *
+ * Default 'openclaw-apac' — different from the legacy 'openclaw' DO so the
+ * first request creates a brand-new DO instance which can honor the location
+ * hint. The R2-backed backup handle (persistence.ts HANDLE_KEY) is keyed by
+ * a fixed R2 path, not by DO name, so the new DO restores from the same
+ * backup on first access — no data loss across the rename.
+ */
+export function resolveSandboxDoName(env: OpenClawEnv): string {
+  return env.OPENCLAW_DO_NAME?.trim() || 'openclaw-apac';
+}
+
+type DurableObjectLocationHint =
+  | 'wnam' | 'enam' | 'sam' | 'weur' | 'eeur' | 'apac' | 'oc' | 'afr' | 'me';
+
+const VALID_LOCATION_HINTS: ReadonlySet<DurableObjectLocationHint> = new Set([
+  'wnam', 'enam', 'sam', 'weur', 'eeur', 'apac', 'oc', 'afr', 'me'
+]);
+
+function resolveLocationHint(env: OpenClawEnv): DurableObjectLocationHint | null {
+  const raw = env.OPENCLAW_DO_LOCATION_HINT?.trim().toLowerCase() ?? 'apac';
+  if (!raw || raw === 'none') return null;
+  return VALID_LOCATION_HINTS.has(raw as DurableObjectLocationHint)
+    ? (raw as DurableObjectLocationHint)
+    : null;
+}
+
+/**
+ * Seed the Sandbox DO with a locationHint exactly once per Worker isolate.
+ *
+ * @cloudflare/sandbox 0.7.20's getSandbox() resolves the stub via
+ * binding.get(objectId) without forwarding any options, so the DO's birth
+ * location is whatever Cloudflare picks at that moment (which for our
+ * runtime worker has historically been AMS via Smart Placement). Calling
+ * binding.get(id, { locationHint }) directly creates a stub whose .fetch()
+ * carries the hint into the DO creation path. After the very first access
+ * places the DO, the hint is sticky for that DO ID and any later
+ * binding.get(id) (with or without hint) routes to the existing instance.
+ *
+ * We pre-seed by hitting any URL the DO will respond to — even a 404 from
+ * the DO's fetch handler is fine, the DO instance is created on first
+ * dispatch regardless of whether the inner container starts.
+ */
+const isolateSeedState = new WeakMap<DurableObjectNamespace<Sandbox>, Promise<void>>();
+
+export async function ensureSandboxLocated(env: OpenClawEnv): Promise<void> {
+  const hint = resolveLocationHint(env);
+  if (!hint) return;
+  const existing = isolateSeedState.get(env.Sandbox);
+  if (existing) {
+    await existing;
+    return;
+  }
+  const doName = resolveSandboxDoName(env);
+  const seedPromise = (async () => {
+    const id = env.Sandbox.idFromName(doName);
+    const stub = env.Sandbox.get(id, { locationHint: hint });
+    try {
+      // Any fetch is sufficient to materialize the DO at the hinted region.
+      // The DO may return 404/500 for an unknown path — we don't care; we
+      // just need the dispatch to happen so the location lock-in occurs.
+      await stub.fetch('http://internal/__seed_location').catch(() => {});
+    } catch {
+      // ignored
+    }
+  })();
+  isolateSeedState.set(env.Sandbox, seedPromise);
+  await seedPromise;
+}
+
 // Main app
 const app = new Hono<AppEnv>();
 
@@ -207,7 +278,10 @@ app.use('*', async (c, next) => {
 // the gateway explicitly call ensureGateway() when they need a warm container.
 app.use('*', async (c, next) => {
   const options = buildSandboxOptions(c.env);
-  const sandbox = getSandbox(c.env.Sandbox, 'openclaw', options);
+  // Seed location once per isolate so the DO is born in apac; cheap no-op
+  // afterwards since the WeakMap-cached promise resolves immediately.
+  await ensureSandboxLocated(c.env);
+  const sandbox = getSandbox(c.env.Sandbox, resolveSandboxDoName(c.env), options);
   c.set('sandbox', sandbox);
 
   // NOTE: restoreIfNeeded is NOT called here in the global middleware.

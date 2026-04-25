@@ -1,6 +1,6 @@
 import { getSandbox } from '@cloudflare/sandbox';
 import type { OpenClawEnv } from '../types';
-import { buildSandboxOptions } from '../index';
+import { buildSandboxOptions, ensureSandboxLocated, resolveSandboxDoName } from '../index';
 import { ensureGateway } from '../gateway';
 import { shouldWakeContainer, DEFAULT_LEAD_TIME_MS, CRON_STORE_R2_KEY } from './wake';
 
@@ -54,7 +54,8 @@ export async function handleScheduled(env: OpenClawEnv): Promise<void> {
   }
 
   console.log(`[CRON] Waking/keeping gateway hot: ${wakeReason}`);
-  const sandbox = getSandbox(env.Sandbox, 'openclaw', buildSandboxOptions(env));
+  await ensureSandboxLocated(env);
+  const sandbox = getSandbox(env.Sandbox, resolveSandboxDoName(env), buildSandboxOptions(env));
   await ensureGateway(sandbox, env);
   console.log('[CRON] Gateway is warm');
 }
