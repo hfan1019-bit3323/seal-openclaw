@@ -94,6 +94,9 @@ export async function restoreIfNeeded(sandbox: Sandbox, bucket: R2Bucket): Promi
   const t0 = Date.now();
   try {
     await sandbox.restoreBackup(handle);
+    await sandbox.exec(
+      'node /usr/local/bin/configure-openclaw-product.mjs --phase=restore',
+    );
     // Clear the restore signal and set the per-isolate flag
     await bucket.delete(RESTORE_NEEDED_KEY);
     restored = true;
