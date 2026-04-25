@@ -34,15 +34,15 @@ ENV OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS=1
 RUN npm install -g openclaw@2026.4.21 \
     && openclaw --version
 
-# Cloud product pruning:
+# Cloud product runtime pre-bake:
 # OpenClaw's eager postinstall places bundled plugin deps at the package root,
-# but the gateway still attempts plugin-local runtime dependency installation
-# for default bundled providers before the deny list fully helps. We do not use
-# Bedrock in seal ai cloud, so remove those bundled provider dirs from the image
-# instead of paying the cold-start install tax on every fresh gateway boot.
-RUN rm -rf \
-    /usr/local/lib/node_modules/openclaw/dist/extensions/amazon-bedrock \
-    /usr/local/lib/node_modules/openclaw/dist/extensions/amazon-bedrock-mantle
+# but the Gateway still expects plugin-local node_modules for some default
+# bundled providers before the deny list fully helps. Keep the plugin dirs
+# intact, but move those npm installs into image build time.
+RUN cd /usr/local/lib/node_modules/openclaw/dist/extensions/amazon-bedrock \
+    && npm install --ignore-scripts --package-lock=false --save=false --legacy-peer-deps \
+    && cd /usr/local/lib/node_modules/openclaw/dist/extensions/amazon-bedrock-mantle \
+    && npm install --ignore-scripts --package-lock=false --save=false --legacy-peer-deps
 
 # Use /home/openclaw as the home directory instead of /root.
 # The Sandbox SDK backup API only allows directories under /home, /workspace,
@@ -57,7 +57,7 @@ RUN mkdir -p /home/openclaw/.openclaw \
 # Copy startup script
 # Use a real Docker instruction instead of a comment so changes to the
 # startup flow always invalidate cached layers during wrangler deploy.
-ARG IMAGE_CACHE_BUST=2026-04-25-v38-prune-bedrock-bundled-plugins
+ARG IMAGE_CACHE_BUST=2026-04-25-v39-prebake-bedrock-plugin-local-deps
 COPY start-openclaw.sh /usr/local/bin/start-openclaw.sh
 RUN chmod +x /usr/local/bin/start-openclaw.sh
 
