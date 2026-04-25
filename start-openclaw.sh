@@ -101,4 +101,4 @@ if [ "${OPENCLAW_PRELOAD_EMBEDDED_RUNNER:-true}" = "false" ]; then
 fi
 
 echo "Preloading embedded runner runtime in gateway process (no model call)..."
-exec node --import "$PRELOAD_SCRIPT" "$OPENCLAW_BIN" gateway --port 18789 --verbose --allow-unconfigured --bind lan
+exec node --disable-warning=DEP0040 --import "$PRELOAD_SCRIPT" "$OPENCLAW_BIN" gateway --port 18789 --verbose --allow-unconfigured --bind lan
