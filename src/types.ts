@@ -45,6 +45,15 @@ export interface OpenClawEnv {
 
   // Cron wake-ahead: wake container before OpenClaw cron jobs fire
   CRON_WAKE_AHEAD_MINUTES?: string; // Minutes before a cron job to wake the container (default: 10)
+
+  // Gateway keep-alive: have the cron tick keep the OpenClaw gateway hot even
+  // when no OpenClaw cron jobs are pending. Eliminates the cold gateway path
+  // for the user-facing chat flow. Set to 'false' to disable.
+  KEEPALIVE_GATEWAY?: string;
+  // How often (minutes) the cron tick should run keep-alive. The Worker cron
+  // schedule still runs every minute; this throttles the keep-alive work so
+  // we don't list-processes the sandbox 1440x/day. Default: 4.
+  KEEPALIVE_GATEWAY_EVERY_MINUTES?: string;
 }
 
 /**

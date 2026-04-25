@@ -5,39 +5,56 @@ import { ensureGateway } from '../gateway';
 import { shouldWakeContainer, DEFAULT_LEAD_TIME_MS, CRON_STORE_R2_KEY } from './wake';
 
 /**
- * Handle Workers Cron Trigger: wake the container if OpenClaw has upcoming cron jobs.
+ * Handle Workers Cron Trigger.
  *
- * Reads the cron job store from R2 (synced by the background sync loop in the container)
- * and checks if any job is scheduled to fire within the lead time window. If so, wakes
- * the container so OpenClaw's internal timers can fire on time.
+ * Two responsibilities, both backed by ensureGateway():
  *
- * Configure via environment variables:
- * - CRON_WAKE_AHEAD_MINUTES: How many minutes before a cron job to wake (default: 10)
+ * 1. Keep-alive: warm the OpenClaw gateway on a configurable cadence so the
+ *    user-facing chat path never pays the ~70s cold gateway cost. Controlled
+ *    by KEEPALIVE_GATEWAY (default 'true') and KEEPALIVE_GATEWAY_EVERY_MINUTES
+ *    (default 4). The Worker cron schedule itself still fires every minute
+ *    (see wrangler.jsonc), but we only do work on the throttled cadence.
  *
- * Configure the check interval in wrangler.jsonc triggers.crons (default: every 1 minute).
+ * 2. Wake-ahead: before an OpenClaw-internal cron job fires, make sure the
+ *    container is awake so the in-container scheduler can run on time.
+ *    Controlled by CRON_WAKE_AHEAD_MINUTES (default 10).
  */
 export async function handleScheduled(env: OpenClawEnv): Promise<void> {
-  const cronStoreObject = await env.BACKUP_BUCKET.get(CRON_STORE_R2_KEY);
-  if (!cronStoreObject) {
-    console.log('[CRON] No cron store found in R2, skipping');
-    return;
-  }
-
-  const cronStoreJson = await cronStoreObject.text();
-  const leadMinutes = parseInt(env.CRON_WAKE_AHEAD_MINUTES || '', 10);
-  const leadTimeMs = leadMinutes > 0 ? leadMinutes * 60 * 1000 : DEFAULT_LEAD_TIME_MS;
   const nowMs = Date.now();
 
-  const earliestRun = shouldWakeContainer(cronStoreJson, nowMs, leadTimeMs);
-  if (!earliestRun) {
-    console.log('[CRON] No upcoming cron jobs within lead time, skipping wake');
+  const keepaliveEnabled = env.KEEPALIVE_GATEWAY !== 'false';
+  const keepaliveEveryMin = parseInt(env.KEEPALIVE_GATEWAY_EVERY_MINUTES || '', 10);
+  const keepaliveCadenceMin = keepaliveEveryMin > 0 ? keepaliveEveryMin : 4;
+  const minuteOfHour = Math.floor(nowMs / 60_000) % 60;
+  const isKeepaliveTick = keepaliveEnabled && minuteOfHour % keepaliveCadenceMin === 0;
+
+  let wakeReason: string | null = null;
+
+  if (isKeepaliveTick) {
+    wakeReason = `keep-alive (every ${keepaliveCadenceMin}m)`;
+  }
+
+  const cronStoreObject = await env.BACKUP_BUCKET.get(CRON_STORE_R2_KEY);
+  if (cronStoreObject) {
+    const cronStoreJson = await cronStoreObject.text();
+    const leadMinutes = parseInt(env.CRON_WAKE_AHEAD_MINUTES || '', 10);
+    const leadTimeMs = leadMinutes > 0 ? leadMinutes * 60 * 1000 : DEFAULT_LEAD_TIME_MS;
+    const earliestRun = shouldWakeContainer(cronStoreJson, nowMs, leadTimeMs);
+    if (earliestRun) {
+      const deltaMinutes = ((earliestRun - nowMs) / 60_000).toFixed(1);
+      wakeReason = wakeReason
+        ? `${wakeReason} + cron job in ${deltaMinutes}m`
+        : `cron job in ${deltaMinutes}m`;
+    }
+  }
+
+  if (!wakeReason) {
+    console.log('[CRON] No wake reason this tick, skipping');
     return;
   }
 
-  const deltaMinutes = ((earliestRun - nowMs) / 60_000).toFixed(1);
-  console.log(`[CRON] Cron job due in ${deltaMinutes}m, waking container`);
-
+  console.log(`[CRON] Waking/keeping gateway hot: ${wakeReason}`);
   const sandbox = getSandbox(env.Sandbox, 'openclaw', buildSandboxOptions(env));
   await ensureGateway(sandbox, env);
-  console.log('[CRON] Container woken successfully');
+  console.log('[CRON] Gateway is warm');
 }
