@@ -341,4 +341,13 @@ if [ -n "$OPENCLAW_GATEWAY_TOKEN" ]; then
 else
     echo "Starting gateway with device pairing (no token)..."
 fi
-exec openclaw gateway --port 18789 --verbose --allow-unconfigured --bind lan
+
+OPENCLAW_BIN="$(command -v openclaw)"
+PRELOAD_SCRIPT="/usr/local/bin/openclaw-embedded-runner-preload.mjs"
+
+if [ "${OPENCLAW_PRELOAD_EMBEDDED_RUNNER:-true}" = "false" ]; then
+    exec "$OPENCLAW_BIN" gateway --port 18789 --verbose --allow-unconfigured --bind lan
+fi
+
+echo "Preloading embedded runner runtime in gateway process (no model call)..."
+exec node --import "$PRELOAD_SCRIPT" "$OPENCLAW_BIN" gateway --port 18789 --verbose --allow-unconfigured --bind lan

@@ -1,0 +1,36 @@
+import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+const enabled = process.env.OPENCLAW_PRELOAD_EMBEDDED_RUNNER !== 'false';
+
+if (enabled) {
+  const startedAt = Date.now();
+  const distRoot =
+    process.env.OPENCLAW_DIST_ROOT || '/usr/local/lib/node_modules/openclaw/dist';
+
+  try {
+    if (!existsSync(distRoot)) {
+      throw new Error(`OpenClaw dist root not found: ${distRoot}`);
+    }
+
+    const files = readdirSync(distRoot)
+      .filter((file) => /^attempt-execution\.runtime-.*\.js$/.test(file))
+      .sort();
+
+    if (files.length === 0) {
+      throw new Error('attempt-execution runtime chunk not found');
+    }
+
+    for (const file of files) {
+      await import(pathToFileURL(join(distRoot, file)).href);
+    }
+
+    console.log(
+      `[preload] embedded runner runtime imported in ${Date.now() - startedAt}ms (${files.join(', ')})`
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[preload] embedded runner runtime import skipped: ${message}`);
+  }
+}

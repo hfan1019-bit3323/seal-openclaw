@@ -57,8 +57,9 @@ RUN mkdir -p /home/openclaw/.openclaw \
 # Copy startup script
 # Use a real Docker instruction instead of a comment so changes to the
 # startup flow always invalidate cached layers during wrangler deploy.
-ARG IMAGE_CACHE_BUST=2026-04-25-v39-prebake-bedrock-plugin-local-deps
+ARG IMAGE_CACHE_BUST=2026-04-25-v40-preload-embedded-runner-runtime
 COPY start-openclaw.sh /usr/local/bin/start-openclaw.sh
+COPY openclaw-embedded-runner-preload.mjs /usr/local/bin/openclaw-embedded-runner-preload.mjs
 RUN chmod +x /usr/local/bin/start-openclaw.sh
 
 # Copy custom skills
