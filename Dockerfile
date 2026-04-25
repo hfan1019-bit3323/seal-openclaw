@@ -22,6 +22,15 @@ RUN ARCH="$(dpkg --print-architecture)" \
 
 # Install OpenClaw
 # Pin to specific version for reproducible builds
+#
+# OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS=1 makes the package's postinstall script
+# install bundled plugin runtime deps during image build instead of lazily on
+# the first gateway boot. This pulls in deps for plugins we will never use
+# (amazon-bedrock, telegram, whatsapp, etc.) but moves those installs out of
+# the cold-start critical path on every container wake. Without it, the
+# gateway runs `npm install <plugin-deps>` at first start, which has been
+# observed to add ~50s to first-token latency.
+ENV OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS=1
 RUN npm install -g openclaw@2026.4.21 \
     && openclaw --version
 
@@ -38,7 +47,7 @@ RUN mkdir -p /home/openclaw/.openclaw \
 # Copy startup script
 # Use a real Docker instruction instead of a comment so changes to the
 # startup flow always invalidate cached layers during wrangler deploy.
-ARG IMAGE_CACHE_BUST=2026-04-24-v36-openclaw-2026-4-21-lean-chat
+ARG IMAGE_CACHE_BUST=2026-04-25-v37-eager-bundled-plugin-deps
 COPY start-openclaw.sh /usr/local/bin/start-openclaw.sh
 RUN chmod +x /usr/local/bin/start-openclaw.sh
 
