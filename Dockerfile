@@ -44,6 +44,18 @@ RUN cd /usr/local/lib/node_modules/openclaw/dist/extensions/amazon-bedrock \
     && cd /usr/local/lib/node_modules/openclaw/dist/extensions/amazon-bedrock-mantle \
     && npm install --ignore-scripts --package-lock=false --save=false --legacy-peer-deps
 
+# Embedded-runner gap instrumentation:
+# Patch the installed selection-*.js chunk to emit single-line `[gap-trace]`
+# markers between `embedded run start` and `embedded run prompt start`. This
+# is observability-only (no behavior change) and idempotent. Toggle off by
+# setting OPENCLAW_GAP_TRACE_DISABLED=1 in the build environment.
+COPY instrument-embedded-run-gap.mjs /usr/local/bin/instrument-embedded-run-gap.mjs
+RUN if [ "${OPENCLAW_GAP_TRACE_DISABLED:-0}" != "1" ]; then \
+        node /usr/local/bin/instrument-embedded-run-gap.mjs; \
+    else \
+        echo "[instrument] OPENCLAW_GAP_TRACE_DISABLED=1, skipping"; \
+    fi
+
 # Use /home/openclaw as the home directory instead of /root.
 # The Sandbox SDK backup API only allows directories under /home, /workspace,
 # /tmp, or /var/tmp — not /root.
@@ -57,7 +69,7 @@ RUN mkdir -p /home/openclaw/.openclaw \
 # Copy startup script
 # Use a real Docker instruction instead of a comment so changes to the
 # startup flow always invalidate cached layers during wrangler deploy.
-ARG IMAGE_CACHE_BUST=2026-04-25-v42-gateway-child-probe
+ARG IMAGE_CACHE_BUST=2026-04-25-v43-gap-trace-instrument
 COPY start-openclaw.sh /usr/local/bin/start-openclaw.sh
 COPY openclaw-embedded-runner-preload.mjs /usr/local/bin/openclaw-embedded-runner-preload.mjs
 COPY configure-openclaw-product.mjs /usr/local/bin/configure-openclaw-product.mjs
