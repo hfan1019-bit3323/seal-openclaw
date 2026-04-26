@@ -19,6 +19,13 @@ export interface OpenClawEnv {
   ANTHROPIC_API_KEY?: string;
   ANTHROPIC_BASE_URL?: string;
   OPENAI_API_KEY?: string;
+  // Direct OpenRouter API key (bypass Cloudflare AI Gateway). When set
+  // together with OPENCLAW_USE_DIRECT_OPENROUTER=1, configure-openclaw-product
+  // wires a `direct-openrouter` provider pointing at https://openrouter.ai/api/v1
+  // and makes it the agent default — useful for measuring how much of the
+  // chat-flow latency is the AI Gateway hop vs the upstream model.
+  OPENROUTER_API_KEY?: string;
+  OPENCLAW_USE_DIRECT_OPENROUTER?: string;
   MOLTBOT_GATEWAY_TOKEN?: string; // Gateway token (mapped to OPENCLAW_GATEWAY_TOKEN for container)
   DEV_MODE?: string; // Set to 'true' for local dev (skips CF Access auth + openclaw device pairing)
   E2E_TEST_MODE?: string; // Set to 'true' for E2E tests (skips CF Access auth but keeps device pairing)

@@ -138,6 +138,32 @@ if (accountId && gatewayId && gatewayApiKey) {
   };
 }
 
+// Direct OpenRouter (no AI Gateway) — opt-in latency comparison path.
+// Activates only when OPENCLAW_USE_DIRECT_OPENROUTER=1 AND we have a key.
+// Wins over the cf-ai-gw-openrouter default by being applied AFTER it.
+const directOpenRouterKey = process.env.OPENROUTER_API_KEY;
+const useDirectOpenRouter = process.env.OPENCLAW_USE_DIRECT_OPENROUTER === '1';
+if (useDirectOpenRouter && directOpenRouterKey) {
+  config.models = config.models || {};
+  config.models.providers = config.models.providers || {};
+  config.models.providers['direct-openrouter'] = {
+    baseUrl: 'https://openrouter.ai/api/v1',
+    apiKey: directOpenRouterKey,
+    api: 'openai-completions',
+    models: [
+      {
+        id: desiredOpenRouterModelId,
+        name: desiredOpenRouterModelId,
+        contextWindow: 1000000,
+        maxTokens: 8192,
+      },
+    ],
+  };
+  config.agents.defaults.model = {
+    primary: `direct-openrouter/${desiredOpenRouterModelId}`,
+  };
+}
+
 const directGatewayProvider = config.models?.providers?.['cloudflare-ai-gateway'];
 if (
   directGatewayProvider &&

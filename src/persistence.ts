@@ -1,4 +1,6 @@
 import type { Sandbox } from '@cloudflare/sandbox';
+import type { OpenClawEnv } from './types';
+import { buildEnvVars } from './gateway/env';
 
 const BACKUP_DIR = '/home/openclaw';
 const PERSISTED_OPENCLAW_STATE_DIR = '/home/openclaw/clawd/.persist/openclaw';
@@ -66,7 +68,11 @@ async function syncOpenClawStateToPersist(sandbox: Sandbox): Promise<void> {
  * The backup handle is read from R2 (persisted across Worker isolate restarts).
  * An in-memory flag prevents redundant restores within the same isolate.
  */
-export async function restoreIfNeeded(sandbox: Sandbox, bucket: R2Bucket): Promise<void> {
+export async function restoreIfNeeded(
+  sandbox: Sandbox,
+  bucket: R2Bucket,
+  env?: OpenClawEnv,
+): Promise<void> {
   if (restored) {
     // Fast path: this isolate already restored. But check if another
     // isolate signaled a restore is needed (e.g. after gateway restart).
@@ -94,8 +100,20 @@ export async function restoreIfNeeded(sandbox: Sandbox, bucket: R2Bucket): Promi
   const t0 = Date.now();
   try {
     await sandbox.restoreBackup(handle);
+    // CRITICAL: pass env vars explicitly. sandbox.exec does not inherit the
+    // Worker's secrets — without this, configure-openclaw-product.mjs runs
+    // blind to CLOUDFLARE_AI_GATEWAY_*/OPENROUTER_API_KEY/etc, can't add
+    // the OpenRouter provider, and silently leaves the freshly-restored
+    // (and stale) AI Gateway config in place. That manifests as
+    // "agent model: cloudflare-ai-gateway/claude-sonnet-4-5" — a model id
+    // that isn't even in the provider catalog. start-openclaw.sh got the
+    // env via startProcess() so its run was correct; only this restore
+    // path was leaking, which is exactly when R2 has just overwritten
+    // the file with the previous backup's stale config.
+    const restoreEnv = env ? buildEnvVars(env) : undefined;
     await sandbox.exec(
       'node /usr/local/bin/configure-openclaw-product.mjs --phase=restore',
+      restoreEnv ? { env: restoreEnv } : undefined,
     );
     // Clear the restore signal and set the per-isolate flag
     await bucket.delete(RESTORE_NEEDED_KEY);

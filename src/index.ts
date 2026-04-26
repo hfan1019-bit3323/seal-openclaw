@@ -421,7 +421,7 @@ app.all('*', async (c) => {
   // the gateway to be running. Restore first, then start.
   if (!isWebSocketRequest && !acceptsHtml) {
     try {
-      await restoreIfNeeded(sandbox, c.env.BACKUP_BUCKET);
+      await restoreIfNeeded(sandbox, c.env.BACKUP_BUCKET, c.env);
     } catch {
       // non-fatal
     }
@@ -440,7 +440,7 @@ app.all('*', async (c) => {
   // targets a listening port rather than just a booted container VM.
   if (isWebSocketRequest) {
     try {
-      await restoreIfNeeded(sandbox, c.env.BACKUP_BUCKET);
+      await restoreIfNeeded(sandbox, c.env.BACKUP_BUCKET, c.env);
     } catch {
       // non-fatal
     }
@@ -490,7 +490,7 @@ app.all('*', async (c) => {
       if (isContainerNotRunningError(err)) {
         console.log('[WS] Container is cold, restoring and starting gateway before retry...');
         try {
-          await restoreIfNeeded(sandbox, c.env.BACKUP_BUCKET);
+          await restoreIfNeeded(sandbox, c.env.BACKUP_BUCKET, c.env);
         } catch {
           // non-fatal
         }
@@ -505,7 +505,7 @@ app.all('*', async (c) => {
         console.log('[WS] Gateway crashed, attempting restore + restart and retry...');
         await killGateway(sandbox);
         try {
-          await restoreIfNeeded(sandbox, c.env.BACKUP_BUCKET);
+          await restoreIfNeeded(sandbox, c.env.BACKUP_BUCKET, c.env);
         } catch {
           // non-fatal
         }
@@ -663,7 +663,7 @@ app.all('*', async (c) => {
       console.log('[HTTP] Gateway crashed, attempting restore + restart and retry...');
       await killGateway(sandbox);
       try {
-        await restoreIfNeeded(sandbox, c.env.BACKUP_BUCKET);
+        await restoreIfNeeded(sandbox, c.env.BACKUP_BUCKET, c.env);
       } catch {
         // non-fatal
       }
